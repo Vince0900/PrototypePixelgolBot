@@ -6,19 +6,17 @@ import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// =========================
-// CONFIGURAZIONE COMANDO
-// =========================
 const VOTE_CHANNEL_ID = "1508376281220382842";
 const ACCEPTED_CHANNEL_ID = "1470700465175003209";
 
-// 4 ore = 14400000 millisecondi. Modifica questo valore se vuoi cambiare durata.
+// 4 ore = 14400000 millisecondi.
 const VOTE_DURATION_MS = 14400000;
 
 const CHECK_EMOJI = "✅";
 const CROSS_EMOJI = "❌";
 
-const DATA_FOLDER = path.join(__dirname, "..", "bot_data");
+// Non devi creare questa cartella a mano: viene creata automaticamente.
+const DATA_FOLDER = path.join(process.cwd(), "bot_data");
 const LOG_FILE = path.join(DATA_FOLDER, "inactivity_logs.json");
 
 async function ensureDataFolder() {
@@ -30,9 +28,7 @@ async function loadJson(filePath, fallback) {
     const raw = await fs.readFile(filePath, "utf8");
     return JSON.parse(raw);
   } catch (error) {
-    if (error.code === "ENOENT") {
-      return fallback;
-    }
+    if (error.code === "ENOENT") return fallback;
     throw error;
   }
 }
@@ -91,16 +87,8 @@ async function createVoteEmbed(request) {
       { name: "IGN", value: request.ign, inline: false },
       { name: "DURATA DELL'INATTIVITÀ", value: request.duration, inline: false },
       { name: "MOTIVO", value: request.reason, inline: false },
-      {
-        name: "Richiesta inviata",
-        value: discordTimestamp(request.requestedAt),
-        inline: true,
-      },
-      {
-        name: "Scadenza votazione",
-        value: discordTimestamp(request.expiresAt, "R"),
-        inline: true,
-      },
+      { name: "Richiesta inviata", value: discordTimestamp(request.requestedAt), inline: true },
+      { name: "Scadenza votazione", value: discordTimestamp(request.expiresAt, "R"), inline: true },
       {
         name: "Log utente",
         value: [
@@ -141,13 +129,8 @@ function createRejectedDmEmbed(request) {
 async function countReaction(message, emoji) {
   const freshMessage = await message.channel.messages.fetch(message.id);
   const reaction = freshMessage.reactions.cache.get(emoji);
-
-  if (!reaction) {
-    return 0;
-  }
-
-  const fetchedReaction = reaction.partial ? await reaction.fetch() : reaction;
-  return Math.max(0, fetchedReaction.count - 1);
+  if (!reaction) return 0;
+  return Math.max(0, reaction.count - 1);
 }
 
 async function finalizeRequest(client, voteMessage, request) {
@@ -183,93 +166,86 @@ async function finalizeRequest(client, voteMessage, request) {
   await voteMessage.reply(`Richiesta rifiutata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
 }
 
-const command = {
-  data: new SlashCommandBuilder()
-    .setName("richiesta_inattivita")
-    .setDescription("Richiedi Inattività dal moderare il server o inattività generale")
-    .addStringOption((option) =>
-      option
-        .setName("durata")
-        .setDescription("Quanto durerà la tua inattività")
-        .setRequired(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName("motivo")
-        .setDescription("Il motivo della tua inattività")
-        .setRequired(true),
-    ),
+export const data = new SlashCommandBuilder()
+  .setName("richiesta_inattivita")
+  .setDescription("Richiedi Inattività dal moderare il server o inattività generale")
+  .addStringOption((option) =>
+    option
+      .setName("durata")
+      .setDescription("Quanto durerà la tua inattività")
+      .setRequired(true),
+  )
+  .addStringOption((option) =>
+    option
+      .setName("motivo")
+      .setDescription("Il motivo della tua inattività")
+      .setRequired(true),
+  );
 
-  async execute(interaction) {
-    try {
-      if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ ephemeral: true });
-      }
+export const name = "richiesta_inattivita";
+export const description = "Richiedi Inattività dal moderare il server o inattività generale";
 
-      const duration = interaction.options.getString("durata", true);
-      const reason = interaction.options.getString("motivo", true);
-      const ign = interaction.member?.displayName || interaction.user.username;
-      const requestedAt = Date.now();
-      const expiresAt = requestedAt + VOTE_DURATION_MS;
+export async function execute(interaction) {
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true });
+  }
 
-      const request = {
-        userId: interaction.user.id,
-        username: interaction.user.tag,
-        ign,
-        duration,
-        reason,
-        requestedAt,
-        expiresAt,
-      };
+  try {
+    const duration = interaction.options.getString("durata", true);
+    const reason = interaction.options.getString("motivo", true);
+    const ign = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + VOTE_DURATION_MS;
 
-      const voteChannel = await interaction.client.channels.fetch(VOTE_CHANNEL_ID);
+    const request = {
+      userId: interaction.user.id,
+      username: interaction.user.tag,
+      ign,
+      duration,
+      reason,
+      requestedAt,
+      expiresAt,
+    };
 
-      if (!voteChannel || !voteChannel.isTextBased()) {
-        await interaction.editReply({
-          content: "Non riesco a trovare il canale votazione oppure non posso scriverci. Controlla l'ID del canale e i permessi del bot.",
-        });
-        return;
-      }
+    const voteChannel = await interaction.client.channels.fetch(VOTE_CHANNEL_ID);
 
-      const voteMessage = await voteChannel.send({
-        embeds: [await createVoteEmbed(request)],
+    if (!voteChannel || !voteChannel.isTextBased()) {
+      await interaction.editReply("Non riesco a trovare il canale votazione. Controlla che l'ID sia corretto.");
+      return;
+    }
+
+    const voteMessage = await voteChannel.send({ embeds: [await createVoteEmbed(request)] });
+    await voteMessage.react(CHECK_EMOJI);
+    await voteMessage.react(CROSS_EMOJI);
+
+    setTimeout(() => {
+      finalizeRequest(interaction.client, voteMessage, request).catch((error) => {
+        console.error("Errore durante la chiusura della richiesta inattività:", error);
       });
+    }, VOTE_DURATION_MS);
 
-      try {
-        await voteMessage.react(CHECK_EMOJI);
-        await voteMessage.react(CROSS_EMOJI);
-      } catch (error) {
-        await interaction.editReply({
-          content: "Ho inviato la richiesta, ma non riesco ad aggiungere le reazioni. Controlla che il bot abbia i permessi Add Reactions e Read Message History.",
-        });
-        console.error("Errore reazioni richiesta inattivita:", error);
-        return;
-      }
+    await interaction.editReply("La tua richiesta di inattività è stata inviata alla votazione.");
+  } catch (error) {
+    console.error("Errore comando richiesta_inattivita:", error);
 
-      setTimeout(() => {
-        finalizeRequest(interaction.client, voteMessage, request).catch((error) => {
-          console.error(`Errore durante la chiusura della richiesta ${voteMessage.id}:`, error);
-        });
-      }, VOTE_DURATION_MS);
+    const message = "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(message).catch(() => {});
+    } else {
+      await interaction.reply({ content: message, ephemeral: true }).catch(() => {});
+    }
+  }
+}
 
-      await interaction.editReply({
-        content: "La tua richiesta di inattività è stata inviata alla votazione.",
-      });
-    } catch (error) {
-      console.error("Errore comando richiesta_inattivita:", error);
+// Alias per handler diversi.
+export const run = execute;
+export const callback = execute;
 
-      const errorMessage = "Il comando ha avuto un errore. Controlla ID canali e permessi del bot: View Channel, Send Messages, Embed Links, Add Reactions, Read Message History.";
-
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({ content: errorMessage }).catch(() => {});
-      } else {
-        await interaction.reply({ content: errorMessage, ephemeral: true }).catch(() => {});
-      }
-    }  },
+export default {
+  data,
+  name,
+  description,
+  execute,
+  run,
+  callback,
 };
-
-export const data = command.data;
-export const execute = command.execute;
-export default command;
-
-
