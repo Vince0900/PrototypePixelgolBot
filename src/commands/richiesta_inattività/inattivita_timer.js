@@ -1,10 +1,15 @@
 ﻿import fs from "node:fs/promises";
 import path from "node:path";
-import { EmbedBuilder, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 
 const DATA_FOLDER = path.join(process.cwd(), "bot_data");
 const CONFIG_FILE = path.join(DATA_FOLDER, "inactivity_config.json");
 const DEFAULT_VOTE_DURATION_MS = 14400000;
+const DEFAULT_TIMER_ROLE_WHITELIST = [
+  "1493155148619583489",
+  "1459630459939061862",
+  "1462951377809444917",
+];
 
 async function ensureDataFolder() {
   await fs.mkdir(DATA_FOLDER, { recursive: true });
@@ -25,39 +30,132 @@ async function saveJson(filePath, data) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+async function getConfig() {
+  const config = await loadJson(CONFIG_FILE, {});
+  const whitelist = Array.isArray(config.timerRoleWhitelist) && config.timerRoleWhitelist.length > 0
+    ? config.timerRoleWhitelist
+    : DEFAULT_TIMER_ROLE_WHITELIST;
+
+  return {
+    ...config,
+    voteDurationMs: Number(config.voteDurationMs) || DEFAULT_VOTE_DURATION_MS,
+    timerRoleWhitelist: whitelist,
+  };
+}
+
+function hasWhitelistedRole(interaction, roleIds) {
+  const memberRoles = interaction.member?.roles;
+  if (!memberRoles) return false;
+
+  if (memberRoles.cache) {
+    return roleIds.some((roleId) => memberRoles.cache.has(roleId));
+  }
+
+  if (Array.isArray(memberRoles)) {
+    return roleIds.some((roleId) => memberRoles.includes(roleId));
+  }
+
+  return false;
+}
+
 function formatDuration(ms) {
-  const totalMinutes = Math.round(ms / 60000);
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
   const parts = [];
 
-  if (days) parts.push(`${days}g`);
   if (hours) parts.push(`${hours}h`);
   if (minutes) parts.push(`${minutes}m`);
+  if (seconds) parts.push(`${seconds}s`);
 
-  return parts.length ? parts.join(" ") : "meno di 1 minuto";
+  return parts.length ? parts.join(" ") : "0s";
+}
+
+function buildDurationMs(interaction) {
+  const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === "secondi") {
+    return interaction.options.getInteger("secondi", true) * 1000;
+  }
+
+  if (subcommand === "minuti") {
+    const minutes = interaction.options.getInteger("minuti", true);
+    const seconds = interaction.options.getInteger("secondi") || 0;
+    return ((minutes * 60) + seconds) * 1000;
+  }
+
+  const hours = interaction.options.getInteger("ore", true);
+  const minutes = interaction.options.getInteger("minuti") || 0;
+  const seconds = interaction.options.getInteger("secondi") || 0;
+  return ((hours * 3600) + (minutes * 60) + seconds) * 1000;
 }
 
 export const data = new SlashCommandBuilder()
   .setName("inattivita_timer")
   .setDescription("Modifica il timer delle richieste di inattività")
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addIntegerOption((option) =>
-    option
-      .setName("ore")
-      .setDescription("Numero di ore del timer")
-      .setMinValue(0)
-      .setMaxValue(720)
-      .setRequired(true),
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("secondi")
+      .setDescription("Imposta il timer usando solo i secondi")
+      .addIntegerOption((option) =>
+        option
+          .setName("secondi")
+          .setDescription("Numero di secondi")
+          .setMinValue(1)
+          .setMaxValue(2592000)
+          .setRequired(true),
+      ),
   )
-  .addIntegerOption((option) =>
-    option
+  .addSubcommand((subcommand) =>
+    subcommand
       .setName("minuti")
-      .setDescription("Minuti aggiuntivi del timer")
-      .setMinValue(0)
-      .setMaxValue(59)
-      .setRequired(false),
+      .setDescription("Imposta il timer usando minuti e secondi")
+      .addIntegerOption((option) =>
+        option
+          .setName("minuti")
+          .setDescription("Numero di minuti")
+          .setMinValue(1)
+          .setMaxValue(43200)
+          .setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("secondi")
+          .setDescription("Secondi aggiuntivi")
+          .setMinValue(0)
+          .setMaxValue(59)
+          .setRequired(false),
+      ),
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("ore")
+      .setDescription("Imposta il timer usando ore, minuti e secondi")
+      .addIntegerOption((option) =>
+        option
+          .setName("ore")
+          .setDescription("Numero di ore")
+          .setMinValue(1)
+          .setMaxValue(720)
+          .setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("minuti")
+          .setDescription("Minuti aggiuntivi")
+          .setMinValue(0)
+          .setMaxValue(59)
+          .setRequired(false),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("secondi")
+          .setDescription("Secondi aggiuntivi")
+          .setMinValue(0)
+          .setMaxValue(59)
+          .setRequired(false),
+      ),
   );
 
 export const name = "inattivita_timer";
@@ -66,19 +164,20 @@ export const description = "Modifica il timer delle richieste di inattività";
 export async function execute(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
-  const hours = interaction.options.getInteger("ore", true);
-  const minutes = interaction.options.getInteger("minuti") || 0;
-  const voteDurationMs = (hours * 60 + minutes) * 60 * 1000;
+  const config = await getConfig();
 
-  if (voteDurationMs <= 0) {
-    await interaction.editReply("Il timer deve essere maggiore di 0 minuti.");
+  if (!hasWhitelistedRole(interaction, config.timerRoleWhitelist)) {
+    await interaction.editReply("Non puoi usare questo comando: il tuo ruolo non è nella whitelist del timer inattività.");
     return;
   }
 
-  const oldConfig = await loadJson(CONFIG_FILE, { voteDurationMs: DEFAULT_VOTE_DURATION_MS });
+  const voteDurationMs = buildDurationMs(interaction);
+  const oldDurationMs = config.voteDurationMs;
+
   const newConfig = {
-    ...oldConfig,
+    ...config,
     voteDurationMs,
+    timerRoleWhitelist: config.timerRoleWhitelist,
     updatedAt: new Date().toISOString(),
     updatedBy: interaction.user.id,
   };
@@ -90,7 +189,7 @@ export async function execute(interaction) {
     .setColor(0x57f287)
     .setDescription(`Le nuove richieste useranno un timer di **${formatDuration(voteDurationMs)}**.`)
     .addFields(
-      { name: "Prima", value: formatDuration(Number(oldConfig.voteDurationMs) || DEFAULT_VOTE_DURATION_MS), inline: true },
+      { name: "Prima", value: formatDuration(oldDurationMs), inline: true },
       { name: "Ora", value: formatDuration(voteDurationMs), inline: true },
     )
     .setTimestamp(new Date());
