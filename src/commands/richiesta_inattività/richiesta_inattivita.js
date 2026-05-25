@@ -201,45 +201,75 @@ const command = {
     ),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: true });
+      }
 
-    const duration = interaction.options.getString("durata", true);
-    const reason = interaction.options.getString("motivo", true);
-    const ign = interaction.member?.displayName || interaction.user.username;
-    const requestedAt = Date.now();
-    const expiresAt = requestedAt + VOTE_DURATION_MS;
+      const duration = interaction.options.getString("durata", true);
+      const reason = interaction.options.getString("motivo", true);
+      const ign = interaction.member?.displayName || interaction.user.username;
+      const requestedAt = Date.now();
+      const expiresAt = requestedAt + VOTE_DURATION_MS;
 
-    const request = {
-      userId: interaction.user.id,
-      username: interaction.user.tag,
-      ign,
-      duration,
-      reason,
-      requestedAt,
-      expiresAt,
-    };
+      const request = {
+        userId: interaction.user.id,
+        username: interaction.user.tag,
+        ign,
+        duration,
+        reason,
+        requestedAt,
+        expiresAt,
+      };
 
-    const voteChannel = await interaction.client.channels.fetch(VOTE_CHANNEL_ID);
-    const voteMessage = await voteChannel.send({
-      embeds: [await createVoteEmbed(request)],
-    });
+      const voteChannel = await interaction.client.channels.fetch(VOTE_CHANNEL_ID);
 
-    await voteMessage.react(CHECK_EMOJI);
-    await voteMessage.react(CROSS_EMOJI);
+      if (!voteChannel || !voteChannel.isTextBased()) {
+        await interaction.editReply({
+          content: "Non riesco a trovare il canale votazione oppure non posso scriverci. Controlla l'ID del canale e i permessi del bot.",
+        });
+        return;
+      }
 
-    setTimeout(() => {
-      finalizeRequest(interaction.client, voteMessage, request).catch((error) => {
-        console.error(`Errore durante la chiusura della richiesta ${voteMessage.id}:`, error);
+      const voteMessage = await voteChannel.send({
+        embeds: [await createVoteEmbed(request)],
       });
-    }, VOTE_DURATION_MS);
 
-    await interaction.editReply({
-      content: "La tua richiesta di inattività è stata inviata alla votazione.",
-    });
-  },
+      try {
+        await voteMessage.react(CHECK_EMOJI);
+        await voteMessage.react(CROSS_EMOJI);
+      } catch (error) {
+        await interaction.editReply({
+          content: "Ho inviato la richiesta, ma non riesco ad aggiungere le reazioni. Controlla che il bot abbia i permessi Add Reactions e Read Message History.",
+        });
+        console.error("Errore reazioni richiesta inattivita:", error);
+        return;
+      }
+
+      setTimeout(() => {
+        finalizeRequest(interaction.client, voteMessage, request).catch((error) => {
+          console.error(`Errore durante la chiusura della richiesta ${voteMessage.id}:`, error);
+        });
+      }, VOTE_DURATION_MS);
+
+      await interaction.editReply({
+        content: "La tua richiesta di inattività è stata inviata alla votazione.",
+      });
+    } catch (error) {
+      console.error("Errore comando richiesta_inattivita:", error);
+
+      const errorMessage = "Il comando ha avuto un errore. Controlla ID canali e permessi del bot: View Channel, Send Messages, Embed Links, Add Reactions, Read Message History.";
+
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: errorMessage }).catch(() => {});
+      } else {
+        await interaction.reply({ content: errorMessage, ephemeral: true }).catch(() => {});
+      }
+    }  },
 };
 
 export const data = command.data;
 export const execute = command.execute;
 export default command;
+
 
