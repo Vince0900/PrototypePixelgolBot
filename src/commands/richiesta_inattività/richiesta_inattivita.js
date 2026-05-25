@@ -1,16 +1,12 @@
 ﻿import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const VOTE_CHANNEL_ID = "1508376281220382842";
 const ACCEPTED_CHANNEL_ID = "1470700465175003209";
 
 // 4 ore = 14400000 millisecondi.
-const VOTE_DURATION_MS = 30000;
+const DEFAULT_VOTE_DURATION_MS = 14400000;
 
 const CHECK_EMOJI = "✅";
 const CROSS_EMOJI = "❌";
@@ -18,6 +14,9 @@ const CROSS_EMOJI = "❌";
 // Non devi creare questa cartella a mano: viene creata automaticamente.
 const DATA_FOLDER = path.join(process.cwd(), "bot_data");
 const LOG_FILE = path.join(DATA_FOLDER, "inactivity_logs.json");
+const PENDING_FILE = path.join(DATA_FOLDER, "pending_inactivity_requests.json");
+const CONFIG_FILE = path.join(DATA_FOLDER, "inactivity_config.json");
+const scheduledFinalizers = new Map();
 
 async function ensureDataFolder() {
   await fs.mkdir(DATA_FOLDER, { recursive: true });
@@ -38,6 +37,16 @@ async function saveJson(filePath, data) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+async function getInactivityConfig() {
+  const config = await loadJson(CONFIG_FILE, {});
+  const voteDurationMs = Number(config.voteDurationMs);
+
+  return {
+    voteDurationMs: Number.isFinite(voteDurationMs) && voteDurationMs > 0
+      ? voteDurationMs
+      : DEFAULT_VOTE_DURATION_MS,
+  };
+}
 async function getUserLogSummary(userId) {
   const logs = await loadJson(LOG_FILE, {});
   const userLog = logs[userId] || {};
@@ -71,6 +80,18 @@ async function addLogEntry(userId, entry) {
 
   logs[userId].requests.push(entry);
   await saveJson(LOG_FILE, logs);
+}
+
+async function savePendingRequest(messageId, request) {
+  const pendingRequests = await loadJson(PENDING_FILE, {});
+  pendingRequests[messageId] = request;
+  await saveJson(PENDING_FILE, pendingRequests);
+}
+
+async function removePendingRequest(messageId) {
+  const pendingRequests = await loadJson(PENDING_FILE, {});
+  delete pendingRequests[messageId];
+  await saveJson(PENDING_FILE, pendingRequests);
 }
 
 function discordTimestamp(dateMs, style = "F") {
@@ -132,37 +153,64 @@ async function countReaction(message, emoji) {
   return Math.max(0, reaction.count - 1);
 }
 
-async function finalizeRequest(client, voteMessage, request) {
-  const checkVotes = await countReaction(voteMessage, CHECK_EMOJI);
-  const crossVotes = await countReaction(voteMessage, CROSS_EMOJI);
-  const accepted = checkVotes > crossVotes;
-
-  await addLogEntry(request.userId, {
-    status: accepted ? "accepted" : "rejected",
-    requestedAt: new Date(request.requestedAt).toISOString(),
-    finalizedAt: new Date().toISOString(),
-    duration: request.duration,
-    reason: request.reason,
-    voteMessageId: voteMessage.id,
-    checkVotes,
-    crossVotes,
-  });
-
-  if (accepted) {
-    const acceptedChannel = await client.channels.fetch(ACCEPTED_CHANNEL_ID);
-    await acceptedChannel.send({ embeds: [createAcceptedEmbed(request)] });
-    await voteMessage.reply(`Richiesta accettata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
-    return;
-  }
-
+async function finalizeRequest(client, messageId, request) {
   try {
-    const user = await client.users.fetch(request.userId);
-    await user.send({ embeds: [createRejectedDmEmbed(request)] });
-  } catch (error) {
-    console.warn(`Impossibile mandare DM a ${request.userId}: ${error.message}`);
-  }
+    const voteChannel = await client.channels.fetch(VOTE_CHANNEL_ID);
+    const voteMessage = await voteChannel.messages.fetch(messageId);
+    const checkVotes = await countReaction(voteMessage, CHECK_EMOJI);
+    const crossVotes = await countReaction(voteMessage, CROSS_EMOJI);
+    const accepted = checkVotes > crossVotes;
 
-  await voteMessage.reply(`Richiesta rifiutata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
+    await addLogEntry(request.userId, {
+      status: accepted ? "accepted" : "rejected",
+      requestedAt: new Date(request.requestedAt).toISOString(),
+      finalizedAt: new Date().toISOString(),
+      duration: request.duration,
+      reason: request.reason,
+      voteMessageId: messageId,
+      checkVotes,
+      crossVotes,
+    });
+
+    if (accepted) {
+      const acceptedChannel = await client.channels.fetch(ACCEPTED_CHANNEL_ID);
+      await acceptedChannel.send({ embeds: [createAcceptedEmbed(request)] });
+      await voteMessage.reply(`Richiesta accettata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
+    } else {
+      try {
+        const user = await client.users.fetch(request.userId);
+        await user.send({ embeds: [createRejectedDmEmbed(request)] });
+      } catch (error) {
+        console.warn(`Impossibile mandare DM a ${request.userId}: ${error.message}`);
+      }
+
+      await voteMessage.reply(`Richiesta rifiutata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
+    }
+  } finally {
+    await removePendingRequest(messageId);
+    scheduledFinalizers.delete(messageId);
+  }
+}
+
+function scheduleFinalizer(client, messageId, request) {
+  if (scheduledFinalizers.has(messageId)) return;
+
+  const delay = Math.max(0, request.expiresAt - Date.now());
+  const timeout = setTimeout(() => {
+    finalizeRequest(client, messageId, request).catch((error) => {
+      console.error("Errore durante la chiusura della richiesta inattività:", error);
+    });
+  }, delay);
+
+  scheduledFinalizers.set(messageId, timeout);
+}
+
+export async function resumePendingInactivityRequests(client) {
+  const pendingRequests = await loadJson(PENDING_FILE, {});
+
+  for (const [messageId, request] of Object.entries(pendingRequests)) {
+    scheduleFinalizer(client, messageId, request);
+  }
 }
 
 export const data = new SlashCommandBuilder()
@@ -194,7 +242,8 @@ export async function execute(interaction) {
     const reason = interaction.options.getString("motivo", true);
     const ign = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
     const requestedAt = Date.now();
-    const expiresAt = requestedAt + VOTE_DURATION_MS;
+    const inactivityConfig = await getInactivityConfig();
+    const expiresAt = requestedAt + inactivityConfig.voteDurationMs;
 
     const request = {
       userId: interaction.user.id,
@@ -217,13 +266,10 @@ export async function execute(interaction) {
     await voteMessage.react(CHECK_EMOJI);
     await voteMessage.react(CROSS_EMOJI);
 
-    setTimeout(() => {
-      finalizeRequest(interaction.client, voteMessage, request).catch((error) => {
-        console.error("Errore durante la chiusura della richiesta inattività:", error);
-      });
-    }, VOTE_DURATION_MS);
+    await savePendingRequest(voteMessage.id, request);
+    scheduleFinalizer(interaction.client, voteMessage.id, request);
 
-    await interaction.editReply("La tua richiesta di inattività è stata inviata alla votazione.");
+    await interaction.editReply(`Grazie, la tua richiesta è stata mandata in revisione dallo staff, riceverai una risposta tra ${discordTimestamp(expiresAt, "R")}.`);
   } catch (error) {
     console.error("Errore comando richiesta_inattivita:", error);
 
@@ -236,7 +282,6 @@ export async function execute(interaction) {
   }
 }
 
-// Alias per handler diversi.
 export const run = execute;
 export const callback = execute;
 
@@ -247,5 +292,6 @@ export default {
   execute,
   run,
   callback,
+  resumePendingInactivityRequests,
 };
 
