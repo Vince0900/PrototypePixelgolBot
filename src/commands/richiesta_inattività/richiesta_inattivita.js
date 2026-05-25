@@ -114,14 +114,14 @@ function discordTimestamp(dateMs, style = "F") {
   return `<t:${Math.floor(dateMs / 1000)}:${style}>`;
 }
 
-function parseInactivityEnd(input, requestedAt) {
+function parsePreciseTime(input, minTime = Date.now()) {
   const value = input.trim();
   const timestampMatch = value.match(/<t:(\d{10,13})(?::[tTdDfFR])?>|(?:^|\s)t:(\d{10,13})(?:\s|$)/);
 
   if (timestampMatch) {
     const raw = timestampMatch[1] || timestampMatch[2];
     const timestamp = Number(raw.length === 13 ? raw : `${raw}000`);
-    if (timestamp > requestedAt) return timestamp;
+    if (timestamp > minTime) return timestamp;
   }
 
   const tokenRegex = /(\d+)\s*(secondi|secondo|sec|s|minuti|minuto|min|m|ore|ora|h|giorni|giorno|g|d)/gi;
@@ -138,11 +138,11 @@ function parseInactivityEnd(input, requestedAt) {
     else if (["giorni", "giorno", "g", "d"].includes(unit)) totalMs += amount * 24 * 60 * 60 * 1000;
   }
 
-  if (totalMs > 0) return requestedAt + totalMs;
+  if (totalMs > 0) return minTime + totalMs;
 
   const normalizedDate = value.replace(" ", "T");
   const parsedDate = Date.parse(normalizedDate);
-  if (!Number.isNaN(parsedDate) && parsedDate > requestedAt) {
+  if (!Number.isNaN(parsedDate) && parsedDate > minTime) {
     return parsedDate;
   }
 
@@ -157,8 +157,7 @@ async function createVoteEmbed(request) {
     .setColor(0xf2c94c)
     .addFields(
       { name: "IGN", value: request.ign, inline: false },
-      { name: "DURATA DELL'INATTIVITÀ", value: discordTimestamp(request.inactivityEndsAt, "R"), inline: false },
-      { name: "FINE INATTIVITÀ", value: discordTimestamp(request.inactivityEndsAt), inline: false },
+      { name: "DURATA DELL'INATTIVITÀ", value: `${discordTimestamp(request.inactivityStartsAt)} al ${discordTimestamp(request.inactivityEndsAt)}`, inline: false },
       { name: "MOTIVO", value: request.reason, inline: false },
       { name: "Richiesta inviata", value: discordTimestamp(request.requestedAt), inline: true },
       { name: "Scadenza votazione", value: discordTimestamp(request.expiresAt, "R"), inline: true },
@@ -180,8 +179,7 @@ function createAcceptedEmbed(request, color = 0x2ecc71) {
     .setColor(color)
     .addFields(
       { name: "IGN", value: request.ign, inline: false },
-      { name: "DURATA DELL'INATTIVITÀ", value: discordTimestamp(request.inactivityEndsAt, "R"), inline: false },
-      { name: "FINE INATTIVITÀ", value: discordTimestamp(request.inactivityEndsAt), inline: false },
+      { name: "DURATA DELL'INATTIVITÀ", value: `${discordTimestamp(request.inactivityStartsAt)} al ${discordTimestamp(request.inactivityEndsAt)}`, inline: false },
       { name: "MOTIVO", value: request.reason, inline: false },
     )
     .setTimestamp(new Date());
@@ -193,7 +191,7 @@ function createAcceptedDmEmbed(request) {
     .setDescription(`La tua richiesta di inattività è stata accettata. La pausa finirà ${discordTimestamp(request.inactivityEndsAt, "R")}.`)
     .setColor(0x2ecc71)
     .addFields(
-      { name: "FINE INATTIVITÀ", value: discordTimestamp(request.inactivityEndsAt), inline: false },
+      { name: "DURATA", value: `${discordTimestamp(request.inactivityStartsAt)} al ${discordTimestamp(request.inactivityEndsAt)}`, inline: false },
       { name: "MOTIVO", value: request.reason, inline: false },
     )
     .setTimestamp(new Date());
@@ -216,7 +214,7 @@ function createRejectedDmEmbed(request) {
     .setDescription("La tua richiesta di inattività non è stata accettata. Puoi riprovare inviando una nuova richiesta.")
     .setColor(0xe74c3c)
     .addFields(
-      { name: "FINE RICHIESTA", value: discordTimestamp(request.inactivityEndsAt), inline: false },
+      { name: "DURATA RICHIESTA", value: `${discordTimestamp(request.inactivityStartsAt)} al ${discordTimestamp(request.inactivityEndsAt)}`, inline: false },
       { name: "MOTIVO", value: request.reason, inline: false },
     )
     .setTimestamp(new Date());
@@ -228,7 +226,7 @@ function createTieDmEmbed(request) {
     .setDescription("I voti sono arrivati alla pari, quindi ti chiediamo di richiedere nuovamente l'inattività.")
     .setColor(0xf2c94c)
     .addFields(
-      { name: "FINE RICHIESTA", value: discordTimestamp(request.inactivityEndsAt), inline: false },
+      { name: "DURATA RICHIESTA", value: `${discordTimestamp(request.inactivityStartsAt)} al ${discordTimestamp(request.inactivityEndsAt)}`, inline: false },
       { name: "MOTIVO", value: request.reason, inline: false },
     )
     .setTimestamp(new Date());
@@ -287,6 +285,7 @@ async function finalizeRequest(client, messageId, request) {
       status: accepted ? "accepted" : tied ? "tied" : "rejected",
       requestedAt: new Date(request.requestedAt).toISOString(),
       finalizedAt: new Date().toISOString(),
+      inactivityStartsAt: new Date(request.inactivityStartsAt).toISOString(),
       inactivityEndsAt: new Date(request.inactivityEndsAt).toISOString(),
       reason: request.reason,
       voteMessageId: messageId,
@@ -368,8 +367,14 @@ export const data = new SlashCommandBuilder()
   .setDescription("Richiedi Inattività dal moderare il server o inattività generale")
   .addStringOption((option) =>
     option
-      .setName("durata")
-      .setDescription("Usa tempo preciso: <t:...>, 2h 30m, 3g, o 2026-05-30 18:00")
+      .setName("inizio")
+      .setDescription("Giorno/ora di inizio: <t:...>, domani, o 2026-05-30 18:00")
+      .setRequired(true),
+  )
+  .addStringOption((option) =>
+    option
+      .setName("fine")
+      .setDescription("Giorno/ora di fine: <t:...>, 3g, o 2026-06-02 18:00")
       .setRequired(true),
   )
   .addStringOption((option) =>
@@ -388,19 +393,26 @@ export async function execute(interaction) {
   }
 
   try {
-    const durationInput = interaction.options.getString("durata", true);
+    const startInput = interaction.options.getString("inizio", true);
+    const endInput = interaction.options.getString("fine", true);
     const reason = interaction.options.getString("motivo", true);
     const ign = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
     const requestedAt = Date.now();
     const inactivityConfig = await getInactivityConfig();
     const expiresAt = requestedAt + inactivityConfig.voteDurationMs;
-    const inactivityEndsAt = parseInactivityEnd(durationInput, requestedAt);
+    const inactivityStartsAt = parsePreciseTime(startInput, requestedAt - 60_000);
+    const inactivityEndsAt = parsePreciseTime(endInput, inactivityStartsAt);
+
+    if (inactivityEndsAt <= inactivityStartsAt) {
+      throw new Error("Fine inattività non valida");
+    }
 
     const request = {
       userId: interaction.user.id,
       username: interaction.user.tag,
       ign,
-      durationInput,
+      startInput,
+      endInput,
       reason,
       requestedAt,
       expiresAt,
@@ -425,8 +437,8 @@ export async function execute(interaction) {
   } catch (error) {
     console.error("Errore comando richiesta_inattivita:", error);
 
-    const message = error.message === "Formato durata non valido"
-      ? "Durata non valida. Usa un tempo preciso, ad esempio `<t:1770000000:R>`, `2h 30m`, `3g`, oppure `2026-05-30 18:00`."
+    const message = error.message === "Formato durata non valido" || error.message === "Fine inattività non valida"
+      ? "Date non valide. Usa `inizio` e `fine` con tempi precisi, ad esempio `<t:1770000000:F>`, `2026-05-30 18:00`, oppure una durata relativa come `3g` per la fine."
       : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
 
     if (interaction.deferred || interaction.replied) {
@@ -449,3 +461,4 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
