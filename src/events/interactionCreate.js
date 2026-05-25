@@ -1,8 +1,6 @@
 import { Events, MessageFlags } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildConfig } from '../services/guildConfig.js';
-import { handleApplicationModal } from '../commands/Community/apply.js';
-import { handleApplicationReviewModal } from '../commands/Community/app-admin.js';
 import { handleInteractionError, createError, ErrorTypes } from '../utils/errorHandler.js';
 import { MessageTemplates } from '../utils/messageTemplates.js';
 import { InteractionHelper } from '../utils/interactionHelper.js';
@@ -306,6 +304,7 @@ export default {
         } else if (interaction.isModalSubmit()) {
           if (interaction.customId.startsWith('app_modal_')) {
             try {
+              const { handleApplicationModal } = await import('../commands/Community/apply.js');
               await handleApplicationModal(interaction);
             } catch (error) {
               await handleInteractionError(interaction, error, withTraceContext({
@@ -319,6 +318,7 @@ export default {
 
           if (interaction.customId.startsWith('app_review_')) {
             try {
+              const { handleApplicationReviewModal } = await import('../commands/Community/app-admin.js');
               await handleApplicationReviewModal(interaction);
             } catch (error) {
               await handleInteractionError(interaction, error, withTraceContext({
@@ -405,3 +405,4 @@ export default {
     });
   }
 };
+
