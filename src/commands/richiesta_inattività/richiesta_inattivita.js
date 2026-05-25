@@ -368,13 +368,13 @@ export const data = new SlashCommandBuilder()
   .addStringOption((option) =>
     option
       .setName("inizio")
-      .setDescription("Giorno/ora di inizio: <t:...>, domani, o 2026-05-30 18:00")
+      .setDescription("Il giorno quando vuoi iniziare la tua inattività, scrivilo cosi: 2026-05-30")
       .setRequired(true),
   )
   .addStringOption((option) =>
     option
       .setName("fine")
-      .setDescription("Giorno/ora di fine: <t:...>, 3g, o 2026-06-02 18:00")
+      .setDescription("Il giorno quando vuoi terminare la tua inattività, scrivilo tipo cosi: 2026-06-02")
       .setRequired(true),
   )
   .addStringOption((option) =>
@@ -438,7 +438,7 @@ export async function execute(interaction) {
     console.error("Errore comando richiesta_inattivita:", error);
 
     const message = error.message === "Formato durata non valido" || error.message === "Fine inattività non valida"
-      ? "Date non valide. Usa `inizio` e `fine` con tempi precisi, ad esempio `<t:1770000000:F>`, `2026-05-30 18:00`, oppure una durata relativa come `3g` per la fine."
+      ? "Errore, metti inizio e fine come cosi: anno-mese-giorno"
       : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
 
     if (interaction.deferred || interaction.replied) {
