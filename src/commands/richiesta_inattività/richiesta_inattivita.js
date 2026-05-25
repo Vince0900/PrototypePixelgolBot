@@ -4,6 +4,7 @@ import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 
 const VOTE_CHANNEL_ID = "1508376281220382842";
 const ACCEPTED_CHANNEL_ID = "1470700465175003209";
+const ACCEPTED_ROLE_ID = "1491889075526041630";
 
 // 4 ore = 14400000 millisecondi.
 const DEFAULT_VOTE_DURATION_MS = 14400000;
@@ -134,6 +135,17 @@ function createAcceptedEmbed(request) {
     .setTimestamp(new Date());
 }
 
+function createAcceptedDmEmbed(request) {
+  return new EmbedBuilder()
+    .setTitle("Richiesta di inattività accettata")
+    .setDescription("La tua richiesta di inattività è stata accettata.")
+    .setColor(0x2ecc71)
+    .addFields(
+      { name: "DURATA DELL'INATTIVITÀ", value: request.duration, inline: false },
+      { name: "MOTIVO", value: request.reason, inline: false },
+    )
+    .setTimestamp(new Date());
+}
 function createRejectedDmEmbed(request) {
   return new EmbedBuilder()
     .setTitle("Richiesta di inattività non accettata")
@@ -146,6 +158,17 @@ function createRejectedDmEmbed(request) {
     .setTimestamp(new Date());
 }
 
+function createTieDmEmbed(request) {
+  return new EmbedBuilder()
+    .setTitle("Richiesta di inattività in parità")
+    .setDescription("I voti sono arrivati alla pari, quindi ti chiediamo di richiedere nuovamente l'inattività.")
+    .setColor(0xf2c94c)
+    .addFields(
+      { name: "DURATA DELL'INATTIVITÀ", value: request.duration, inline: false },
+      { name: "MOTIVO", value: request.reason, inline: false },
+    )
+    .setTimestamp(new Date());
+}
 async function countReaction(message, emoji) {
   const freshMessage = await message.channel.messages.fetch(message.id);
   const reaction = freshMessage.reactions.cache.get(emoji);
@@ -160,9 +183,10 @@ async function finalizeRequest(client, messageId, request) {
     const checkVotes = await countReaction(voteMessage, CHECK_EMOJI);
     const crossVotes = await countReaction(voteMessage, CROSS_EMOJI);
     const accepted = checkVotes > crossVotes;
+    const tied = checkVotes === crossVotes;
 
     await addLogEntry(request.userId, {
-      status: accepted ? "accepted" : "rejected",
+      status: accepted ? "accepted" : tied ? "tied" : "rejected",
       requestedAt: new Date(request.requestedAt).toISOString(),
       finalizedAt: new Date().toISOString(),
       duration: request.duration,
@@ -175,23 +199,37 @@ async function finalizeRequest(client, messageId, request) {
     if (accepted) {
       const acceptedChannel = await client.channels.fetch(ACCEPTED_CHANNEL_ID);
       await acceptedChannel.send({ embeds: [createAcceptedEmbed(request)] });
-      await voteMessage.reply(`Richiesta accettata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
-    } else {
+
       try {
-        const user = await client.users.fetch(request.userId);
-        await user.send({ embeds: [createRejectedDmEmbed(request)] });
+        const guild = voteMessage.guild;
+        const member = await guild.members.fetch(request.userId);
+        await member.roles.add(ACCEPTED_ROLE_ID);
+        await member.send({ embeds: [createAcceptedDmEmbed(request)] });
       } catch (error) {
-        console.warn(`Impossibile mandare DM a ${request.userId}: ${error.message}`);
+        console.warn(`Impossibile mandare DM o assegnare ruolo a ${request.userId}: ${error.message}`);
       }
 
-      await voteMessage.reply(`Richiesta rifiutata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
+      await voteMessage.reply(`Richiesta accettata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
+      return;
     }
+
+    try {
+      const user = await client.users.fetch(request.userId);
+      await user.send({ embeds: [tied ? createTieDmEmbed(request) : createRejectedDmEmbed(request)] });
+    } catch (error) {
+      console.warn(`Impossibile mandare DM a ${request.userId}: ${error.message}`);
+    }
+
+    await voteMessage.reply(
+      tied
+        ? `Richiesta chiusa in parità con ${checkVotes} ${CHECK_EMOJI} e ${crossVotes} ${CROSS_EMOJI}.`
+        : `Richiesta rifiutata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`
+    );
   } finally {
     await removePendingRequest(messageId);
     scheduledFinalizers.delete(messageId);
   }
 }
-
 function scheduleFinalizer(client, messageId, request) {
   if (scheduledFinalizers.has(messageId)) return;
 
@@ -294,4 +332,5 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
