@@ -201,6 +201,8 @@ const command = {
     ),
 
   async execute(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+
     const duration = interaction.options.getString("durata", true);
     const reason = interaction.options.getString("motivo", true);
     const ign = interaction.member?.displayName || interaction.user.username;
@@ -231,9 +233,8 @@ const command = {
       });
     }, VOTE_DURATION_MS);
 
-    await interaction.reply({
+    await interaction.editReply({
       content: "La tua richiesta di inattività è stata inviata alla votazione.",
-      ephemeral: true,
     });
   },
 };
@@ -241,3 +242,4 @@ const command = {
 export const data = command.data;
 export const execute = command.execute;
 export default command;
+
