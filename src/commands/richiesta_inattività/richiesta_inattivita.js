@@ -10,7 +10,7 @@ const VOTE_CHANNEL_ID = "1508376281220382842";
 const ACCEPTED_CHANNEL_ID = "1470700465175003209";
 
 // 4 ore = 14400000 millisecondi.
-const VOTE_DURATION_MS = 60000;
+const VOTE_DURATION_MS = 14400000;
 
 const CHECK_EMOJI = "✅";
 const CROSS_EMOJI = "❌";
@@ -104,7 +104,6 @@ async function createVoteEmbed(request) {
 
 function createAcceptedEmbed(request) {
   return new EmbedBuilder()
-    .setTitle("Inattività accettata")
     .setColor(0x2ecc71)
     .addFields(
       { name: "IGN", value: request.ign, inline: false },
@@ -249,3 +248,4 @@ export default {
   run,
   callback,
 };
+

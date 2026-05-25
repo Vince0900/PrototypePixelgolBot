@@ -33,12 +33,12 @@ async function saveJson(filePath, data) {
 const command = {
   data: new SlashCommandBuilder()
     .setName("inattivita_clear")
-    .setDescription("Rimuovi tutti i log di inattività di un utente")
+    .setDescription("Rimuovi le informazioni dei log inattività di un utente")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addUserOption((option) =>
       option
         .setName("utente")
-        .setDescription("Utente a cui rimuovere i log inattività")
+        .setDescription("Utente a cui azzerare le informazioni dei log")
         .setRequired(true),
     ),
 
@@ -64,13 +64,13 @@ const command = {
     await saveJson(LOG_FILE, logs);
 
     const embed = new EmbedBuilder()
-      .setTitle("Log inattività rimossi")
+      .setTitle("Informazioni log rimosse")
       .setColor(0x57f287)
-      .setDescription(`${user} ora risulta come se non avesse mai fatto richieste di inattività.`)
+      .setDescription(`${user} ora non ha più statistiche salvate nei log inattività.`)
       .addFields(
-        { name: "Richieste rimosse", value: String(removedTotal), inline: true },
-        { name: "Accettate rimosse", value: String(removedAccepted), inline: true },
-        { name: "Rifiutate rimosse", value: String(removedRejected), inline: true },
+        { name: "totalRequests rimossi", value: String(removedTotal), inline: true },
+        { name: "acceptedRequests rimossi", value: String(removedAccepted), inline: true },
+        { name: "rejectedRequests rimossi", value: String(removedRejected), inline: true },
       )
       .setTimestamp(new Date());
 
@@ -81,3 +81,4 @@ const command = {
 export const data = command.data;
 export const execute = command.execute;
 export default command;
+
