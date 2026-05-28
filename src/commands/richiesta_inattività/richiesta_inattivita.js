@@ -106,7 +106,7 @@ function parseDiscordTime(input) {
     .replace(/\s+/g, " ");
 
   // Formato italiano: 28/05/2026 oppure 28/05/2026 18:30
-  const italianDateMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
+  const italianDateMatch = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
   if (italianDateMatch) {
     const [, day, month, year, hour = "0", minute = "0"] = italianDateMatch;
     const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
@@ -303,13 +303,13 @@ export const data = new SlashCommandBuilder()
   .addStringOption((option) =>
     option
       .setName("inizio")
-      .setDescription("Data di inizio: 28/05/2026, 28/05/2026 18:30, 2026-05-28")
+      .setDescription("Data scelta dall utente, es. 28/05/2026 oppure 2026-05-28 18:30")
       .setRequired(true),
   )
   .addStringOption((option) =>
     option
       .setName("fine")
-      .setDescription("Data di fine: 28/05/2026, 28/05/2026 18:30, 2026-05-28")
+      .setDescription("Data scelta dall utente, es. 30/05/2026 oppure 2026-05-30 18:30")
       .setRequired(true),
   )
   .addStringOption((option) =>
@@ -374,7 +374,7 @@ export async function execute(interaction) {
     console.error("Errore comando richiesta_inattivita:", error);
 
     const message = error.message === "Formato data non valido"
-      ? "Formato data non valido. Usa `28/05/2026`, `28/05/2026 18:30`, `2026-05-28` oppure `2026-05-28 18:30`."
+      ? "Formato data non valido. Inserisci una data reale scelta da te. Esempi: `28/05/2026`, `28/05/2026 18:30`, `2026-05-28`, `2026-05-28 18:30`."
       : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => {});
@@ -396,6 +396,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
