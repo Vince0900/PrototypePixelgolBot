@@ -100,10 +100,13 @@ function discordTimestamp(dateMs, style = "F") {
 }
 
 function parseDiscordTime(input) {
-  const value = input.trim();
+  const value = input
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ");
 
-  // Formato italiano: 28/05/2026 18:30
-  const italianDateMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  // Formato italiano: 28/05/2026 oppure 28/05/2026 18:30
+  const italianDateMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
   if (italianDateMatch) {
     const [, day, month, year, hour = "0", minute = "0"] = italianDateMatch;
     const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
@@ -121,8 +124,8 @@ function parseDiscordTime(input) {
     }
   }
 
-  // Formato ISO semplice: 2026-05-28 18:30
-  const isoDateMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  // Formato ISO semplice: 2026-05-28 oppure 2026-05-28 18:30
+  const isoDateMatch = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
   if (isoDateMatch) {
     const [, year, month, day, hour = "0", minute = "0"] = isoDateMatch;
     const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
@@ -371,7 +374,7 @@ export async function execute(interaction) {
     console.error("Errore comando richiesta_inattivita:", error);
 
     const message = error.message === "Formato data non valido"
-      ? "Formato data non valido. Usa `28/05/2026`, `28/05/2026 18:30`, `2026-05-28` oppure `2026-05-28 18:30`. Se non metti l'orario, viene usata mezzanotte italiana."
+      ? "Formato data non valido. Usa `28/05/2026`, `28/05/2026 18:30`, `2026-05-28` oppure `2026-05-28 18:30`."
       : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => {});
@@ -393,6 +396,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
