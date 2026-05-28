@@ -99,6 +99,17 @@ function discordTimestamp(dateMs, style = "F") {
   return `<t:${Math.floor(dateMs / 1000)}:${style}>`;
 }
 
+function parseDiscordTime(input) {
+  const match = input.match(/<t:(\d{10,13})(?::[tTdDfFR])?>/);
+
+  if (!match) {
+    throw new Error("Formato @time non valido");
+  }
+
+  const raw = match[1];
+  return Number(raw.length === 13 ? raw : `${raw}000`);
+}
+
 async function createVoteEmbed(request) {
   const summary = await getUserLogSummary(request.userId);
 
@@ -256,8 +267,14 @@ export const data = new SlashCommandBuilder()
   .setDescription("Richiedi Inattività dal moderare il server o inattività generale")
   .addStringOption((option) =>
     option
-      .setName("durata")
-      .setDescription("Quanto durerà la tua inattività")
+      .setName("inizio")
+      .setDescription("Data di inizio usando @time Discord, esempio <t:1770000000:F>")
+      .setRequired(true),
+  )
+  .addStringOption((option) =>
+    option
+      .setName("fine")
+      .setDescription("Data di fine usando @time Discord, esempio <t:1770300000:F>")
       .setRequired(true),
   )
   .addStringOption((option) =>
@@ -276,18 +293,28 @@ export async function execute(interaction) {
   }
 
   try {
-    const duration = interaction.options.getString("durata", true);
+    const startInput = interaction.options.getString("inizio", true);
+    const endInput = interaction.options.getString("fine", true);
     const reason = interaction.options.getString("motivo", true);
     const ign = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
     const requestedAt = Date.now();
     const inactivityConfig = await getInactivityConfig();
     const expiresAt = requestedAt + inactivityConfig.voteDurationMs;
+    const startAt = parseDiscordTime(startInput);
+    const endAt = parseDiscordTime(endInput);
+
+    if (endAt <= startAt) {
+      await interaction.editReply("La data di fine deve essere dopo la data di inizio.");
+      return;
+    }
 
     const request = {
       userId: interaction.user.id,
       username: interaction.user.tag,
       ign,
-      duration,
+      duration: `${startInput} al ${endInput}`,
+      startAt,
+      endAt,
       reason,
       requestedAt,
       expiresAt,
@@ -311,7 +338,9 @@ export async function execute(interaction) {
   } catch (error) {
     console.error("Errore comando richiesta_inattivita:", error);
 
-    const message = "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
+    const message = error.message === "Formato @time non valido"
+      ? "Formato data non valido. Usa @time di Discord, esempio `<t:1770000000:F>`, sia per `inizio` sia per `fine`."
+      : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => {});
     } else {
@@ -332,5 +361,6 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
