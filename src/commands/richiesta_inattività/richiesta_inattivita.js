@@ -20,6 +20,7 @@ const ACTIVE_FILE = path.join(DATA_FOLDER, "active_inactivity_ranges.json");
 const CONFIG_FILE = path.join(DATA_FOLDER, "inactivity_config.json");
 const scheduledFinalizers = new Map();
 const scheduledRangeTimers = new Map();
+const MAX_TIMEOUT_MS = 2_147_000_000;
 
 async function ensureDataFolder() {
   await fs.mkdir(DATA_FOLDER, { recursive: true });
@@ -253,10 +254,27 @@ function createInactivityEndedDmEmbed(request) {
     .setTimestamp(new Date());
 }
 
-async function addInactivityRole(client, activeRange) {
-  const guild = await client.guilds.fetch(activeRange.guildId);
+function safeSetTimeout(callback, delay) {
+  if (delay <= MAX_TIMEOUT_MS) {
+    return setTimeout(callback, Math.max(0, delay));
+  }
+
+  return setTimeout(() => {
+    safeSetTimeout(callback, delay - MAX_TIMEOUT_MS);
+  }, MAX_TIMEOUT_MS);
+}
+
+async function addInactivityRole(client, key, activeRange) {
+  const guild = client.guilds.cache.get(activeRange.guildId) || await client.guilds.fetch(activeRange.guildId);
   const member = await guild.members.fetch(activeRange.request.userId);
-  await member.roles.add(ACCEPTED_ROLE_ID);
+  await member.roles.add(ACCEPTED_ROLE_ID, "Inizio periodo inattività approvato");
+
+  const updatedRange = {
+    ...activeRange,
+    roleAssigned: true,
+    roleAssignedAt: new Date().toISOString(),
+  };
+  await saveActiveRange(key, updatedRange);
 
   try {
     await member.send({ embeds: [createInactivityStartedDmEmbed(activeRange.request)] });
@@ -267,9 +285,12 @@ async function addInactivityRole(client, activeRange) {
 
 async function removeInactivityRole(client, key, activeRange) {
   try {
-    const guild = await client.guilds.fetch(activeRange.guildId);
+    const guild = client.guilds.cache.get(activeRange.guildId) || await client.guilds.fetch(activeRange.guildId);
     const member = await guild.members.fetch(activeRange.request.userId);
-    await member.roles.remove(ACCEPTED_ROLE_ID);
+
+    if (member.roles.cache.has(ACCEPTED_ROLE_ID)) {
+      await member.roles.remove(ACCEPTED_ROLE_ID, "Fine periodo inattività approvato");
+    }
 
     try {
       await member.send({ embeds: [createInactivityEndedDmEmbed(activeRange.request)] });
@@ -289,27 +310,39 @@ function scheduleActiveRange(client, key, activeRange) {
   if (scheduledRangeTimers.has(key)) return;
 
   const now = Date.now();
-  const startDelay = Math.max(0, activeRange.startAt - now);
-  const endDelay = Math.max(0, activeRange.endAt - now);
 
-  let startTimeout = null;
-  if (activeRange.startAt <= now && activeRange.endAt > now) {
-    addInactivityRole(client, activeRange).catch((error) => {
-      console.error("Errore assegnazione ruolo inattività:", error);
-    });
-  } else if (activeRange.startAt > now) {
-    startTimeout = setTimeout(() => {
-      addInactivityRole(client, activeRange).catch((error) => {
-        console.error("Errore assegnazione ruolo inattività:", error);
+  if (activeRange.endAt <= now) {
+    const endTimeout = safeSetTimeout(() => {
+      removeInactivityRole(client, key, activeRange).catch((error) => {
+        console.error("Errore rimozione ruolo inattività:", error);
       });
-    }, startDelay);
+    }, 0);
+
+    scheduledRangeTimers.set(key, { startTimeout: null, endTimeout });
+    return;
   }
 
-  const endTimeout = setTimeout(() => {
+  let startTimeout = null;
+
+  if (activeRange.startAt <= now && !activeRange.roleAssigned) {
+    startTimeout = safeSetTimeout(() => {
+      addInactivityRole(client, key, activeRange).catch((error) => {
+        console.error("Errore assegnazione ruolo inattività:", error);
+      });
+    }, 0);
+  } else if (activeRange.startAt > now) {
+    startTimeout = safeSetTimeout(() => {
+      addInactivityRole(client, key, activeRange).catch((error) => {
+        console.error("Errore assegnazione ruolo inattività:", error);
+      });
+    }, activeRange.startAt - now);
+  }
+
+  const endTimeout = safeSetTimeout(() => {
     removeInactivityRole(client, key, activeRange).catch((error) => {
       console.error("Errore rimozione ruolo inattività:", error);
     });
-  }, endDelay);
+  }, activeRange.endAt - now);
 
   scheduledRangeTimers.set(key, { startTimeout, endTimeout });
 }
@@ -357,6 +390,7 @@ async function finalizeRequest(client, messageId, request) {
         request,
         startAt: request.startAt,
         endAt: request.endAt,
+        roleAssigned: false,
       };
       await saveActiveRange(messageId, activeRange);
       scheduleActiveRange(client, messageId, activeRange);
@@ -513,6 +547,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
