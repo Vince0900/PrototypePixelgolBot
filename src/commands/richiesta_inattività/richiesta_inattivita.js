@@ -267,22 +267,27 @@ function safeSetTimeout(callback, delay) {
 async function addInactivityRole(client, key, activeRange) {
   const guild = client.guilds.cache.get(activeRange.guildId) || await client.guilds.fetch(activeRange.guildId);
   const member = await guild.members.fetch(activeRange.request.userId);
-  await member.roles.add(ACCEPTED_ROLE_ID, "Inizio periodo inattività approvato");
+  const alreadyHadRole = member.roles.cache.has(ACCEPTED_ROLE_ID);
+
+  if (!alreadyHadRole) {
+    await member.roles.add(ACCEPTED_ROLE_ID, "Inizio periodo inattività approvato");
+  }
 
   const updatedRange = {
     ...activeRange,
     roleAssigned: true,
-    roleAssignedAt: new Date().toISOString(),
+    roleAssignedAt: activeRange.roleAssignedAt || new Date().toISOString(),
   };
   await saveActiveRange(key, updatedRange);
 
-  try {
-    await member.send({ embeds: [createInactivityStartedDmEmbed(activeRange.request)] });
-  } catch (error) {
-    console.warn(`Impossibile mandare DM inizio inattività a ${activeRange.request.userId}: ${error.message}`);
+  if (!activeRange.roleAssigned) {
+    try {
+      await member.send({ embeds: [createInactivityStartedDmEmbed(activeRange.request)] });
+    } catch (error) {
+      console.warn(`Impossibile mandare DM inizio inattività a ${activeRange.request.userId}: ${error.message}`);
+    }
   }
 }
-
 async function removeInactivityRole(client, key, activeRange) {
   try {
     const guild = client.guilds.cache.get(activeRange.guildId) || await client.guilds.fetch(activeRange.guildId);
@@ -324,7 +329,7 @@ function scheduleActiveRange(client, key, activeRange) {
 
   let startTimeout = null;
 
-  if (activeRange.startAt <= now && !activeRange.roleAssigned) {
+  if (activeRange.startAt <= now && activeRange.endAt > now) {
     startTimeout = safeSetTimeout(() => {
       addInactivityRole(client, key, activeRange).catch((error) => {
         console.error("Errore assegnazione ruolo inattività:", error);
@@ -393,7 +398,13 @@ async function finalizeRequest(client, messageId, request) {
         roleAssigned: false,
       };
       await saveActiveRange(messageId, activeRange);
-      scheduleActiveRange(client, messageId, activeRange);
+
+      if (activeRange.startAt <= Date.now() && activeRange.endAt > Date.now()) {
+        await addInactivityRole(client, messageId, activeRange);
+        scheduleActiveRange(client, messageId, { ...activeRange, roleAssigned: true });
+      } else {
+        scheduleActiveRange(client, messageId, activeRange);
+      }
 
       await voteMessage.reply(`Richiesta accettata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
       return;
@@ -547,6 +558,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
