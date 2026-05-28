@@ -100,16 +100,38 @@ function discordTimestamp(dateMs, style = "F") {
 }
 
 function parseDiscordTime(input) {
-  const match = input.match(/<t:(\d{10,13})(?::[tTdDfFR])?>/);
+  const value = input.trim();
 
-  if (!match) {
-    throw new Error("Formato @time non valido");
+  // Accetta: <t:1770000000:F>, <t:1770000000>, t:1770000000:F, t:1770000000
+  const discordTimeMatch = value.match(/<?t:(\d{10,13})(?::[tTdDfFR])?>?/);
+  if (discordTimeMatch) {
+    const raw = discordTimeMatch[1];
+    return Number(raw.length === 13 ? raw : `${raw}000`);
   }
 
-  const raw = match[1];
-  return Number(raw.length === 13 ? raw : `${raw}000`);
-}
+  // Accetta anche solo il numero Unix: 1770000000 oppure 1770000000000
+  const unixMatch = value.match(/^\d{10,13}$/);
+  if (unixMatch) {
+    return Number(value.length === 13 ? value : `${value}000`);
+  }
 
+  // Accetta date italiane: 28/05/2026 18:30 oppure 28-05-2026 18:30
+  const italianDateMatch = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2})(?::(\d{2}))?)?$/);
+  if (italianDateMatch) {
+    const [, day, month, year, hour = "0", minute = "0"] = italianDateMatch;
+    const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+    const timestamp = date.getTime();
+    if (!Number.isNaN(timestamp)) return timestamp;
+  }
+
+  // Accetta date ISO semplici: 2026-05-28 18:30 oppure 2026-05-28T18:30
+  const isoTimestamp = Date.parse(value.replace(" ", "T"));
+  if (!Number.isNaN(isoTimestamp)) {
+    return isoTimestamp;
+  }
+
+  throw new Error("Formato @time non valido");
+}
 async function createVoteEmbed(request) {
   const summary = await getUserLogSummary(request.userId);
 
@@ -339,7 +361,7 @@ export async function execute(interaction) {
     console.error("Errore comando richiesta_inattivita:", error);
 
     const message = error.message === "Formato @time non valido"
-      ? "Formato data non valido. Usa @time di Discord, esempio `<t:1770000000:F>`, sia per `inizio` sia per `fine`."
+      ? "Formato data non valido. Usa un timestamp Discord tipo `<t:1770000000:F>` oppure `t:1770000000`, o una data tipo `28/05/2026 18:30`."
       : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => {});
@@ -361,6 +383,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
