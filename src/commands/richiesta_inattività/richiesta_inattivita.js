@@ -16,8 +16,10 @@ const CROSS_EMOJI = "❌";
 const DATA_FOLDER = path.join(process.cwd(), "bot_data");
 const LOG_FILE = path.join(DATA_FOLDER, "inactivity_logs.json");
 const PENDING_FILE = path.join(DATA_FOLDER, "pending_inactivity_requests.json");
+const ACTIVE_FILE = path.join(DATA_FOLDER, "active_inactivity_ranges.json");
 const CONFIG_FILE = path.join(DATA_FOLDER, "inactivity_config.json");
 const scheduledFinalizers = new Map();
+const scheduledRangeTimers = new Map();
 
 async function ensureDataFolder() {
   await fs.mkdir(DATA_FOLDER, { recursive: true });
@@ -93,6 +95,18 @@ async function removePendingRequest(messageId) {
   const pendingRequests = await loadJson(PENDING_FILE, {});
   delete pendingRequests[messageId];
   await saveJson(PENDING_FILE, pendingRequests);
+}
+
+async function saveActiveRange(key, activeRange) {
+  const activeRanges = await loadJson(ACTIVE_FILE, {});
+  activeRanges[key] = activeRange;
+  await saveJson(ACTIVE_FILE, activeRanges);
+}
+
+async function removeActiveRange(key) {
+  const activeRanges = await loadJson(ACTIVE_FILE, {});
+  delete activeRanges[key];
+  await saveJson(ACTIVE_FILE, activeRanges);
 }
 
 function discordTimestamp(dateMs, style = "F") {
@@ -215,6 +229,90 @@ function createTieDmEmbed(request) {
     )
     .setTimestamp(new Date());
 }
+function createInactivityStartedDmEmbed(request) {
+  return new EmbedBuilder()
+    .setTitle("Inattività iniziata")
+    .setDescription("La tua inattività è iniziata e il ruolo inattività ti è stato assegnato.")
+    .setColor(0x2ecc71)
+    .addFields(
+      { name: "DURATA DELL'INATTIVITÀ", value: request.duration, inline: false },
+      { name: "MOTIVO", value: request.reason, inline: false },
+    )
+    .setTimestamp(new Date());
+}
+
+function createInactivityEndedDmEmbed(request) {
+  return new EmbedBuilder()
+    .setTitle("Inattività terminata")
+    .setDescription("La tua inattività è terminata e il ruolo inattività ti è stato rimosso.")
+    .setColor(0xf2c94c)
+    .addFields(
+      { name: "DURATA DELL'INATTIVITÀ", value: request.duration, inline: false },
+      { name: "MOTIVO", value: request.reason, inline: false },
+    )
+    .setTimestamp(new Date());
+}
+
+async function addInactivityRole(client, activeRange) {
+  const guild = await client.guilds.fetch(activeRange.guildId);
+  const member = await guild.members.fetch(activeRange.request.userId);
+  await member.roles.add(ACCEPTED_ROLE_ID);
+
+  try {
+    await member.send({ embeds: [createInactivityStartedDmEmbed(activeRange.request)] });
+  } catch (error) {
+    console.warn(`Impossibile mandare DM inizio inattività a ${activeRange.request.userId}: ${error.message}`);
+  }
+}
+
+async function removeInactivityRole(client, key, activeRange) {
+  try {
+    const guild = await client.guilds.fetch(activeRange.guildId);
+    const member = await guild.members.fetch(activeRange.request.userId);
+    await member.roles.remove(ACCEPTED_ROLE_ID);
+
+    try {
+      await member.send({ embeds: [createInactivityEndedDmEmbed(activeRange.request)] });
+    } catch (error) {
+      console.warn(`Impossibile mandare DM fine inattività a ${activeRange.request.userId}: ${error.message}`);
+    }
+  } finally {
+    await removeActiveRange(key);
+    const timers = scheduledRangeTimers.get(key);
+    if (timers?.startTimeout) clearTimeout(timers.startTimeout);
+    if (timers?.endTimeout) clearTimeout(timers.endTimeout);
+    scheduledRangeTimers.delete(key);
+  }
+}
+
+function scheduleActiveRange(client, key, activeRange) {
+  if (scheduledRangeTimers.has(key)) return;
+
+  const now = Date.now();
+  const startDelay = Math.max(0, activeRange.startAt - now);
+  const endDelay = Math.max(0, activeRange.endAt - now);
+
+  let startTimeout = null;
+  if (activeRange.startAt <= now && activeRange.endAt > now) {
+    addInactivityRole(client, activeRange).catch((error) => {
+      console.error("Errore assegnazione ruolo inattività:", error);
+    });
+  } else if (activeRange.startAt > now) {
+    startTimeout = setTimeout(() => {
+      addInactivityRole(client, activeRange).catch((error) => {
+        console.error("Errore assegnazione ruolo inattività:", error);
+      });
+    }, startDelay);
+  }
+
+  const endTimeout = setTimeout(() => {
+    removeInactivityRole(client, key, activeRange).catch((error) => {
+      console.error("Errore rimozione ruolo inattività:", error);
+    });
+  }, endDelay);
+
+  scheduledRangeTimers.set(key, { startTimeout, endTimeout });
+}
 async function countReaction(message, emoji) {
   const freshMessage = await message.channel.messages.fetch(message.id);
   const reaction = freshMessage.reactions.cache.get(emoji);
@@ -249,11 +347,19 @@ async function finalizeRequest(client, messageId, request) {
       try {
         const guild = voteMessage.guild;
         const member = await guild.members.fetch(request.userId);
-        await member.roles.add(ACCEPTED_ROLE_ID);
         await member.send({ embeds: [createAcceptedDmEmbed(request)] });
       } catch (error) {
         console.warn(`Impossibile mandare DM o assegnare ruolo a ${request.userId}: ${error.message}`);
       }
+
+      const activeRange = {
+        guildId: voteMessage.guild.id,
+        request,
+        startAt: request.startAt,
+        endAt: request.endAt,
+      };
+      await saveActiveRange(messageId, activeRange);
+      scheduleActiveRange(client, messageId, activeRange);
 
       await voteMessage.reply(`Richiesta accettata con ${checkVotes} ${CHECK_EMOJI} contro ${crossVotes} ${CROSS_EMOJI}.`);
       return;
@@ -294,6 +400,17 @@ export async function resumePendingInactivityRequests(client) {
 
   for (const [messageId, request] of Object.entries(pendingRequests)) {
     scheduleFinalizer(client, messageId, request);
+  }
+
+  const activeRanges = await loadJson(ACTIVE_FILE, {});
+  for (const [key, activeRange] of Object.entries(activeRanges)) {
+    if (activeRange.endAt <= Date.now()) {
+      await removeInactivityRole(client, key, activeRange).catch((error) => {
+        console.error("Errore recupero fine inattività:", error);
+      });
+    } else {
+      scheduleActiveRange(client, key, activeRange);
+    }
   }
 }
 
@@ -396,6 +513,8 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
+
 
 
 
