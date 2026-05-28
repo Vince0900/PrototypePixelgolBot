@@ -102,35 +102,45 @@ function discordTimestamp(dateMs, style = "F") {
 function parseDiscordTime(input) {
   const value = input.trim();
 
-  // Accetta: <t:1770000000:F>, <t:1770000000>, t:1770000000:F, t:1770000000
-  const discordTimeMatch = value.match(/<?t:(\d{10,13})(?::[tTdDfFR])?>?/);
-  if (discordTimeMatch) {
-    const raw = discordTimeMatch[1];
-    return Number(raw.length === 13 ? raw : `${raw}000`);
-  }
-
-  // Accetta anche solo il numero Unix: 1770000000 oppure 1770000000000
-  const unixMatch = value.match(/^\d{10,13}$/);
-  if (unixMatch) {
-    return Number(value.length === 13 ? value : `${value}000`);
-  }
-
-  // Accetta date italiane: 28/05/2026 18:30 oppure 28-05-2026 18:30
-  const italianDateMatch = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2})(?::(\d{2}))?)?$/);
+  // Formato italiano: 28/05/2026 18:30
+  const italianDateMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/);
   if (italianDateMatch) {
-    const [, day, month, year, hour = "0", minute = "0"] = italianDateMatch;
+    const [, day, month, year, hour, minute] = italianDateMatch;
     const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
     const timestamp = date.getTime();
-    if (!Number.isNaN(timestamp)) return timestamp;
+
+    if (
+      !Number.isNaN(timestamp) &&
+      date.getFullYear() === Number(year) &&
+      date.getMonth() === Number(month) - 1 &&
+      date.getDate() === Number(day) &&
+      date.getHours() === Number(hour) &&
+      date.getMinutes() === Number(minute)
+    ) {
+      return timestamp;
+    }
   }
 
-  // Accetta date ISO semplici: 2026-05-28 18:30 oppure 2026-05-28T18:30
-  const isoTimestamp = Date.parse(value.replace(" ", "T"));
-  if (!Number.isNaN(isoTimestamp)) {
-    return isoTimestamp;
+  // Formato ISO semplice: 2026-05-28 18:30
+  const isoDateMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/);
+  if (isoDateMatch) {
+    const [, year, month, day, hour, minute] = isoDateMatch;
+    const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+    const timestamp = date.getTime();
+
+    if (
+      !Number.isNaN(timestamp) &&
+      date.getFullYear() === Number(year) &&
+      date.getMonth() === Number(month) - 1 &&
+      date.getDate() === Number(day) &&
+      date.getHours() === Number(hour) &&
+      date.getMinutes() === Number(minute)
+    ) {
+      return timestamp;
+    }
   }
 
-  throw new Error("Formato @time non valido");
+  throw new Error("Formato data non valido");
 }
 async function createVoteEmbed(request) {
   const summary = await getUserLogSummary(request.userId);
@@ -290,13 +300,13 @@ export const data = new SlashCommandBuilder()
   .addStringOption((option) =>
     option
       .setName("inizio")
-      .setDescription("Data di inizio usando @time Discord, esempio <t:1770000000:F>")
+      .setDescription("Data di inizio: 28/05/2026 18:30 oppure 2026-05-28 18:30")
       .setRequired(true),
   )
   .addStringOption((option) =>
     option
       .setName("fine")
-      .setDescription("Data di fine usando @time Discord, esempio <t:1770300000:F>")
+      .setDescription("Data di fine: 28/05/2026 18:30 oppure 2026-05-28 18:30")
       .setRequired(true),
   )
   .addStringOption((option) =>
@@ -360,8 +370,8 @@ export async function execute(interaction) {
   } catch (error) {
     console.error("Errore comando richiesta_inattivita:", error);
 
-    const message = error.message === "Formato @time non valido"
-      ? "Formato data non valido. Usa un timestamp Discord tipo `<t:1770000000:F>` oppure `t:1770000000`, o una data tipo `28/05/2026 18:30`."
+    const message = error.message === "Formato data non valido"
+      ? "Formato data non valido. Usa solo `28/05/2026 18:30` oppure `2026-05-28 18:30`."
       : "Il comando ha avuto un errore interno. Guarda il terminale/log del bot per vedere il motivo preciso.";
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => {});
@@ -383,6 +393,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
