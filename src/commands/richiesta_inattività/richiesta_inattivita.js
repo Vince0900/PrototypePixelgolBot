@@ -47,10 +47,6 @@ function getInactivityConfigKey(guildId) {
   return `guild:${guildId}:inactivity:config`;
 }
 
-function getInactivityLogsKey(guildId) {
-  return `guild:${guildId}:inactivity:logs`;
-}
-
 async function getInactivityConfig(client = null, guildId = null) {
   let config = {};
 
@@ -77,35 +73,8 @@ async function getInactivityConfig(client = null, guildId = null) {
       ? voteDurationMs
       : DEFAULT_VOTE_DURATION_MS,
   };
-}async function getAllLogs(client = null, guildId = null) {
-  if (client?.db && guildId) {
-    try {
-      const dbLogs = await client.db.get(getInactivityLogsKey(guildId), null);
-      if (dbLogs && typeof dbLogs === "object") {
-        return dbLogs;
-      }
-    } catch (error) {
-      console.warn(`Impossibile leggere inactivity_logs dal database: ${error.message}`);
-    }
-  }
-
-  return loadJson(LOG_FILE, {});
-}
-
-async function saveAllLogs(logs, client = null, guildId = null) {
-  await saveJson(LOG_FILE, logs);
-
-  if (client?.db && guildId) {
-    try {
-      await client.db.set(getInactivityLogsKey(guildId), logs);
-    } catch (error) {
-      console.warn(`Impossibile salvare inactivity_logs nel database: ${error.message}`);
-    }
-  }
-}
-
-async function getUserLogSummary(userId, client = null, guildId = null) {
-  const logs = await getAllLogs(client, guildId);
+}async function getUserLogSummary(userId) {
+  const logs = await loadJson(LOG_FILE, {});
   const userLog = logs[userId] || {};
 
   return {
@@ -115,8 +84,8 @@ async function getUserLogSummary(userId, client = null, guildId = null) {
   };
 }
 
-async function addLogEntry(userId, entry, client = null, guildId = null) {
-  const logs = await getAllLogs(client, guildId);
+async function addLogEntry(userId, entry) {
+  const logs = await loadJson(LOG_FILE, {});
 
   if (!logs[userId]) {
     logs[userId] = {
@@ -131,13 +100,14 @@ async function addLogEntry(userId, entry, client = null, guildId = null) {
 
   if (entry.status === "accepted") {
     logs[userId].acceptedRequests += 1;
-  } else if (entry.status === "rejected") {
+  } else {
     logs[userId].rejectedRequests += 1;
   }
 
   logs[userId].requests.push(entry);
-  await saveAllLogs(logs, client, guildId);
+  await saveJson(LOG_FILE, logs);
 }
+
 async function savePendingRequest(messageId, request) {
   const pendingRequests = await loadJson(PENDING_FILE, {});
   pendingRequests[messageId] = request;
@@ -238,7 +208,7 @@ function parseDiscordTime(input) {
 
   throw new Error("Formato data non valido");
 }async function createVoteEmbed(request) {
-  const summary = await getUserLogSummary(request.userId, request.client, request.guildId);
+  const summary = await getUserLogSummary(request.userId);
 
   return new EmbedBuilder()
     .setTitle("Richiesta di inattività")
@@ -496,7 +466,7 @@ async function finalizeRequest(client, messageId, request) {
       voteMessageId: messageId,
       checkVotes,
       crossVotes,
-    }, client, voteMessage.guild.id);
+    });
 
     if (accepted) {
       const acceptedChannel = await client.channels.fetch(ACCEPTED_CHANNEL_ID);
@@ -640,8 +610,6 @@ export async function execute(interaction) {
     const request = {
       userId: interaction.user.id,
       username: interaction.user.tag,
-      guildId: interaction.guildId,
-      client: interaction.client,
       ign,
       duration: `${startInput} al ${endInput}`,
       startAt,
@@ -662,9 +630,7 @@ export async function execute(interaction) {
     await voteMessage.react(CHECK_EMOJI);
     await voteMessage.react(CROSS_EMOJI);
 
-    const storedRequest = { ...request };
-    delete storedRequest.client;
-    await savePendingRequest(voteMessage.id, storedRequest);
+    await savePendingRequest(voteMessage.id, request);
     scheduleFinalizer(interaction.client, voteMessage.id, request);
 
     await interaction.editReply(`Grazie, la tua richiesta è stata mandata in revisione dallo staff, riceverai una risposta tra ${discordTimestamp(expiresAt, "R")}.`);
@@ -694,7 +660,6 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
-
 
 
 
