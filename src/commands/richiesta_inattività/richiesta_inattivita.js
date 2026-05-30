@@ -316,6 +316,16 @@ async function addInactivityRole(client, key, activeRange) {
 }
 async function removeInactivityRole(client, key, activeRange) {
   try {
+    if (activeRange.acceptedChannelId && activeRange.acceptedMessageId) {
+      try {
+        const acceptedChannel = await client.channels.fetch(activeRange.acceptedChannelId);
+        const acceptedMessage = await acceptedChannel.messages.fetch(activeRange.acceptedMessageId);
+        await acceptedMessage.delete();
+      } catch (error) {
+        console.warn(`Impossibile eliminare il messaggio inattività accettata ${activeRange.acceptedMessageId}: ${error.message}`);
+      }
+    }
+
     const guild = client.guilds.cache.get(activeRange.guildId) || await client.guilds.fetch(activeRange.guildId);
     const member = await guild.members.fetch(activeRange.request.userId);
 
@@ -336,7 +346,6 @@ async function removeInactivityRole(client, key, activeRange) {
     scheduledRangeTimers.delete(key);
   }
 }
-
 function scheduleActiveRange(client, key, activeRange) {
   if (scheduledRangeTimers.has(key)) return;
 
@@ -406,7 +415,7 @@ async function finalizeRequest(client, messageId, request) {
 
     if (accepted) {
       const acceptedChannel = await client.channels.fetch(ACCEPTED_CHANNEL_ID);
-      await acceptedChannel.send({ embeds: [createAcceptedEmbed(request)] });
+      const acceptedMessage = await acceptedChannel.send({ embeds: [createAcceptedEmbed(request)] });
 
       try {
         const guild = voteMessage.guild;
@@ -418,6 +427,8 @@ async function finalizeRequest(client, messageId, request) {
 
       const activeRange = {
         guildId: voteMessage.guild.id,
+        acceptedChannelId: ACCEPTED_CHANNEL_ID,
+        acceptedMessageId: acceptedMessage.id,
         request,
         startAt: request.startAt,
         endAt: request.endAt,
@@ -584,6 +595,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
