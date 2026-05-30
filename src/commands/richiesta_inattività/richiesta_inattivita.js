@@ -21,6 +21,7 @@ const CONFIG_FILE = path.join(DATA_FOLDER, "inactivity_config.json");
 const scheduledFinalizers = new Map();
 const scheduledRangeTimers = new Map();
 const MAX_TIMEOUT_MS = 2_147_000_000;
+const INACTIVITY_TIME_ZONE = "Europe/Rome";
 
 async function ensureDataFolder() {
   await fs.mkdir(DATA_FOLDER, { recursive: true });
@@ -114,6 +115,46 @@ function discordTimestamp(dateMs, style = "F") {
   return `<t:${Math.floor(dateMs / 1000)}:${style}>`;
 }
 
+function getTimeZoneOffsetMs(timeZone, timestamp) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = Object.fromEntries(
+    formatter.formatToParts(new Date(timestamp)).map((part) => [part.type, part.value]),
+  );
+
+  const asUTC = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+
+  return asUTC - timestamp;
+}
+
+function makeItalianTimestamp(year, month, day, hour, minute) {
+  const localAsUTC = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let offset = getTimeZoneOffsetMs(INACTIVITY_TIME_ZONE, localAsUTC);
+  let timestamp = localAsUTC - offset;
+
+  // Second pass handles daylight saving offset changes more safely.
+  offset = getTimeZoneOffsetMs(INACTIVITY_TIME_ZONE, timestamp);
+  timestamp = localAsUTC - offset;
+
+  return timestamp;
+}
+
 function parseDiscordTime(input) {
   const value = input
     .trim()
@@ -124,17 +165,10 @@ function parseDiscordTime(input) {
   const italianDateMatch = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
   if (italianDateMatch) {
     const [, day, month, year, hour = "0", minute = "0"] = italianDateMatch;
-    const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
-    const timestamp = date.getTime();
+    const timestamp = makeItalianTimestamp(Number(year), Number(month), Number(day), Number(hour), Number(minute));
+    const check = new Date(timestamp);
 
-    if (
-      !Number.isNaN(timestamp) &&
-      date.getFullYear() === Number(year) &&
-      date.getMonth() === Number(month) - 1 &&
-      date.getDate() === Number(day) &&
-      date.getHours() === Number(hour) &&
-      date.getMinutes() === Number(minute)
-    ) {
+    if (!Number.isNaN(timestamp) && Number(month) >= 1 && Number(month) <= 12 && Number(day) >= 1 && Number(day) <= 31 && Number(hour) >= 0 && Number(hour) <= 23 && Number(minute) >= 0 && Number(minute) <= 59 && check instanceof Date) {
       return timestamp;
     }
   }
@@ -143,24 +177,16 @@ function parseDiscordTime(input) {
   const isoDateMatch = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
   if (isoDateMatch) {
     const [, year, month, day, hour = "0", minute = "0"] = isoDateMatch;
-    const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
-    const timestamp = date.getTime();
+    const timestamp = makeItalianTimestamp(Number(year), Number(month), Number(day), Number(hour), Number(minute));
+    const check = new Date(timestamp);
 
-    if (
-      !Number.isNaN(timestamp) &&
-      date.getFullYear() === Number(year) &&
-      date.getMonth() === Number(month) - 1 &&
-      date.getDate() === Number(day) &&
-      date.getHours() === Number(hour) &&
-      date.getMinutes() === Number(minute)
-    ) {
+    if (!Number.isNaN(timestamp) && Number(month) >= 1 && Number(month) <= 12 && Number(day) >= 1 && Number(day) <= 31 && Number(hour) >= 0 && Number(hour) <= 23 && Number(minute) >= 0 && Number(minute) <= 59 && check instanceof Date) {
       return timestamp;
     }
   }
 
   throw new Error("Formato data non valido");
-}
-async function createVoteEmbed(request) {
+}async function createVoteEmbed(request) {
   const summary = await getUserLogSummary(request.userId);
 
   return new EmbedBuilder()
@@ -558,6 +584,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
