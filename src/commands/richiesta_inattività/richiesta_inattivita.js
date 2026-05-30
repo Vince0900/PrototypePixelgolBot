@@ -302,19 +302,29 @@ function safeSetTimeout(callback, delay) {
   }, MAX_TIMEOUT_MS);
 }
 
-async function updateArchiveStatus(client, activeRange, status) {
-  if (!activeRange.archiveChannelId || !activeRange.archiveMessageId) return;
+async function updateStatusMessages(client, activeRange, status) {
+  if (activeRange.acceptedChannelId && activeRange.acceptedMessageId && status !== "finita") {
+    try {
+      const acceptedChannel = await client.channels.fetch(activeRange.acceptedChannelId);
+      const acceptedMessage = await acceptedChannel.messages.fetch(activeRange.acceptedMessageId);
+      await acceptedMessage.edit({ embeds: [createArchiveEmbed(activeRange.request, status)] });
+    } catch (error) {
+      console.warn(`Impossibile aggiornare status messaggio inattività accettata ${activeRange.acceptedMessageId}: ${error.message}`);
+    }
+  }
 
-  try {
-    const archiveChannel = await client.channels.fetch(activeRange.archiveChannelId);
-    const archiveMessage = await archiveChannel.messages.fetch(activeRange.archiveMessageId);
-    await archiveMessage.edit({ embeds: [createArchiveEmbed(activeRange.request, status)] });
-  } catch (error) {
-    console.warn(`Impossibile aggiornare status archivio inattività ${activeRange.archiveMessageId}: ${error.message}`);
+  if (activeRange.archiveChannelId && activeRange.archiveMessageId) {
+    try {
+      const archiveChannel = await client.channels.fetch(activeRange.archiveChannelId);
+      const archiveMessage = await archiveChannel.messages.fetch(activeRange.archiveMessageId);
+      await archiveMessage.edit({ embeds: [createArchiveEmbed(activeRange.request, status)] });
+    } catch (error) {
+      console.warn(`Impossibile aggiornare status archivio inattività ${activeRange.archiveMessageId}: ${error.message}`);
+    }
   }
 }
 async function addInactivityRole(client, key, activeRange) {
-  await updateArchiveStatus(client, activeRange, "in corso");
+  await updateStatusMessages(client, activeRange, "in corso");
   const guild = client.guilds.cache.get(activeRange.guildId) || await client.guilds.fetch(activeRange.guildId);
   const member = await guild.members.fetch(activeRange.request.userId);
   const alreadyHadRole = member.roles.cache.has(ACCEPTED_ROLE_ID);
@@ -340,7 +350,7 @@ async function addInactivityRole(client, key, activeRange) {
 }
 async function removeInactivityRole(client, key, activeRange) {
   try {
-    await updateArchiveStatus(client, activeRange, "finita");
+    await updateStatusMessages(client, activeRange, "finita");
     if (activeRange.acceptedChannelId && activeRange.acceptedMessageId) {
       try {
         const acceptedChannel = await client.channels.fetch(activeRange.acceptedChannelId);
@@ -440,7 +450,10 @@ async function finalizeRequest(client, messageId, request) {
 
     if (accepted) {
       const acceptedChannel = await client.channels.fetch(ACCEPTED_CHANNEL_ID);
-      const acceptedMessage = await acceptedChannel.send({ embeds: [createAcceptedEmbed(request)] });
+      const acceptedStatus = request.startAt <= Date.now() && request.endAt > Date.now()
+        ? "in corso"
+        : "ancora non in corso";
+      const acceptedMessage = await acceptedChannel.send({ embeds: [createArchiveEmbed(request, acceptedStatus)] });
       const archiveStatus = request.startAt <= Date.now() && request.endAt > Date.now()
         ? "in corso"
         : "ancora non in corso";
@@ -627,6 +640,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
