@@ -30,8 +30,28 @@ async function saveJson(filePath, data) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
-async function getConfig() {
-  const config = await loadJson(CONFIG_FILE, {});
+function getInactivityConfigKey(guildId) {
+  return `guild:${guildId}:inactivity:config`;
+}
+
+async function getConfig(interaction = null) {
+  let config = {};
+
+  if (interaction?.client?.db && interaction.guildId) {
+    try {
+      const dbConfig = await interaction.client.db.get(getInactivityConfigKey(interaction.guildId), null);
+      if (dbConfig && typeof dbConfig === "object") {
+        config = dbConfig;
+      }
+    } catch (error) {
+      console.warn(`Impossibile leggere inactivity_config dal database: ${error.message}`);
+    }
+  }
+
+  if (!config.voteDurationMs && !config.timerRoleWhitelist) {
+    config = await loadJson(CONFIG_FILE, config);
+  }
+
   const whitelist = Array.isArray(config.timerRoleWhitelist) && config.timerRoleWhitelist.length > 0
     ? config.timerRoleWhitelist
     : DEFAULT_TIMER_ROLE_WHITELIST;
@@ -43,7 +63,20 @@ async function getConfig() {
   };
 }
 
-function hasWhitelistedRole(interaction, roleIds) {
+async function saveConfig(interaction, config) {
+  await saveJson(CONFIG_FILE, config);
+
+  if (interaction?.client?.db && interaction.guildId) {
+    try {
+      await interaction.client.db.set(getInactivityConfigKey(interaction.guildId), config);
+      return true;
+    } catch (error) {
+      console.warn(`Impossibile salvare inactivity_config nel database: ${error.message}`);
+    }
+  }
+
+  return false;
+}function hasWhitelistedRole(interaction, roleIds) {
   const memberRoles = interaction.member?.roles;
   if (!memberRoles) return false;
 
@@ -164,7 +197,7 @@ export const description = "Modifica il timer delle richieste di inattività";
 export async function execute(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
-  const config = await getConfig();
+  const config = await getConfig(interaction);
 
   if (!hasWhitelistedRole(interaction, config.timerRoleWhitelist)) {
     await interaction.editReply("Non puoi usare questo comando: il tuo ruolo non è nella whitelist del timer inattività.");
@@ -182,7 +215,7 @@ export async function execute(interaction) {
     updatedBy: interaction.user.id,
   };
 
-  await saveJson(CONFIG_FILE, newConfig);
+  await saveConfig(interaction, newConfig);
 
   const embed = new EmbedBuilder()
     .setTitle("Timer inattività aggiornato")
@@ -208,3 +241,4 @@ export default {
   run,
   callback,
 };
+

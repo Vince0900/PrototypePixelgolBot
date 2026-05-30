@@ -43,17 +43,37 @@ async function saveJson(filePath, data) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
-async function getInactivityConfig() {
-  const config = await loadJson(CONFIG_FILE, {});
+function getInactivityConfigKey(guildId) {
+  return `guild:${guildId}:inactivity:config`;
+}
+
+async function getInactivityConfig(client = null, guildId = null) {
+  let config = {};
+
+  if (client?.db && guildId) {
+    try {
+      const dbConfig = await client.db.get(getInactivityConfigKey(guildId), null);
+      if (dbConfig && typeof dbConfig === "object") {
+        config = dbConfig;
+      }
+    } catch (error) {
+      console.warn(`Impossibile leggere inactivity_config dal database: ${error.message}`);
+    }
+  }
+
+  if (!config.voteDurationMs) {
+    config = await loadJson(CONFIG_FILE, config);
+  }
+
   const voteDurationMs = Number(config.voteDurationMs);
 
   return {
+    ...config,
     voteDurationMs: Number.isFinite(voteDurationMs) && voteDurationMs > 0
       ? voteDurationMs
       : DEFAULT_VOTE_DURATION_MS,
   };
-}
-async function getUserLogSummary(userId) {
+}async function getUserLogSummary(userId) {
   const logs = await loadJson(LOG_FILE, {});
   const userLog = logs[userId] || {};
 
@@ -577,7 +597,7 @@ export async function execute(interaction) {
     const reason = interaction.options.getString("motivo", true);
     const ign = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
     const requestedAt = Date.now();
-    const inactivityConfig = await getInactivityConfig();
+    const inactivityConfig = await getInactivityConfig(interaction.client, interaction.guildId);
     const expiresAt = requestedAt + inactivityConfig.voteDurationMs;
     const startAt = parseDiscordTime(startInput);
     const endAt = parseDiscordTime(endInput);
@@ -640,6 +660,7 @@ export default {
   callback,
   resumePendingInactivityRequests,
 };
+
 
 
 
